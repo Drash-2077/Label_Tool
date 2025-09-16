@@ -1,0 +1,510 @@
+# Label_Tool 前端页面
+# Author: Dr.Ash
+# Maintainer: Dr.Ash
+# Repository: https://github.com/Drash-2077/Label_Tool
+# License: MIT
+
+import sys
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QFileDialog, QMessageBox, QTreeWidget, QTreeWidgetItem,
+    QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFrame, QGroupBox, QComboBox, QCheckBox
+)
+from PyQt5.QtCore import Qt
+from datetime import datetime
+import pandas as pd
+import logging
+import webbrowser
+import os
+
+from history_manager import HistoryManager
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class App(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Label Tool v1.0")
+        self.resize(1200, 750)
+
+        self.history_manager = HistoryManager()
+        self.jama_items = ["作者身份", "信息来源", "披露声明", "时效性"]
+        self.gqs_items = ["差(1)", "一般(2)", "中等(3)", "良好(4)", "优秀(5)"]
+        self.discern_items = [
+            "视频目的清晰且简洁",
+            "信息来源可靠且明确提及",
+            "内容基于可靠证据或研究",
+            "提及不同的治疗或管理选项",
+            "披露利益冲突或资助来源"
+        ]
+        self.video_category_items = ["广告及其他", "疾病知识类", "预防治疗类", "中医药类"]
+        self.account_type_items = ["非专业个人", "专业个人", "专业机构", "非专业机构"]
+        self.current_meta = None
+        self.current_data = None
+        self.current_jama = None
+        self.current_gqs = None
+        self.current_discern = None
+        self.current_video_category = None
+        self.current_account_type = None
+        self.sort_column = -1
+        self.sort_order = Qt.AscendingOrder
+
+        self.init_ui()
+        self.load_history()
+
+    def init_ui(self):
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        main_layout = QVBoxLayout(central_widget)
+
+        # Top frame (Settings)
+        top_frame = QGroupBox("设置")
+        top_layout = QHBoxLayout(top_frame)
+        top_layout.setSpacing(5)
+        top_layout.setContentsMargins(5, 5, 5, 5)
+
+        self.import_btn = QPushButton("导入CSV")
+        self.import_btn.setMaximumHeight(30)
+        self.import_btn.clicked.connect(self.import_csv)
+        top_layout.addWidget(self.import_btn)
+
+        delete_btn = QPushButton("删除历史记录")
+        delete_btn.setMaximumHeight(30)
+        delete_btn.clicked.connect(self.delete_selected_history)
+        top_layout.addWidget(delete_btn)
+
+        save_btn = QPushButton("保存记录")
+        save_btn.setMaximumHeight(30)
+        save_btn.clicked.connect(self.save_records)
+        top_layout.addWidget(save_btn)
+
+        export_btn = QPushButton("导出数据")
+        export_btn.setMaximumHeight(30)
+        export_btn.clicked.connect(self.export_data)
+        top_layout.addWidget(export_btn)
+
+        top_layout.addStretch()
+        top_frame.setMaximumHeight(50)
+        main_layout.addWidget(top_frame)
+
+        self.status_label = QLabel("等待操作...")
+        self.status_label.setMinimumHeight(60)
+        self.status_label.setMaximumHeight(60)
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setFrameStyle(QFrame.Box | QFrame.Plain)
+        main_layout.addWidget(self.status_label)
+
+        # History tree
+        self.history_tree = QTreeWidget()
+        self.history_tree.setHeaderLabels(["导入时间", "文件名", "数据量"])
+        self.history_tree.header().setSectionResizeMode(QHeaderView.Interactive)
+        self.history_tree.setColumnWidth(0, 200)
+        self.history_tree.setColumnWidth(1, 300)
+        self.history_tree.setColumnWidth(2, 80)
+        self.history_tree.setFixedHeight(150)  # 设置历史记录区域高度
+        self.history_tree.itemSelectionChanged.connect(self.on_history_select)
+        main_layout.addWidget(self.history_tree)
+
+        # Data table
+        self.data_table = QTableWidget()
+        self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.data_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.data_table.setColumnCount(15)  # 包含认证状态列
+        self.data_table.setHorizontalHeaderLabels([
+            "标题", "发布时间", "作者", "点赞数", "评论数", "分享数", "收藏数",
+            "认证状态", "查看", "视频时长（秒）", "JAMA评分", "GQS评分", "DISCERN评分", "视频类别", "账号类型"
+        ])
+        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.data_table.setColumnWidth(0, 300)
+        self.data_table.setColumnWidth(1, 160)
+        self.data_table.setColumnWidth(2, 140)
+        self.data_table.setColumnWidth(3, 100)
+        self.data_table.setColumnWidth(4, 100)
+        self.data_table.setColumnWidth(5, 100)
+        self.data_table.setColumnWidth(6, 100)
+        self.data_table.setColumnWidth(7, 160)  # 认证状态
+        self.data_table.setColumnWidth(8, 80)  # 查看
+        self.data_table.setColumnWidth(9, 120)  # 视频时长
+        self.data_table.setColumnWidth(10, 480)  # JAMA评分
+        self.data_table.setColumnWidth(11, 160)  # GQS评分
+        self.data_table.setColumnWidth(12, 1000) # DISCERN评分
+        self.data_table.setColumnWidth(13, 100)  # 视频类别
+        self.data_table.setColumnWidth(14, 100)  # 账号类型
+        self.data_table.cellClicked.connect(self.on_data_click)
+        self.data_table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
+        self.data_table.horizontalHeader().setSortIndicatorShown(True)
+        main_layout.addWidget(self.data_table)
+
+    def import_csv(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "选择CSV文件", "", "CSV文件 (*.csv);;所有文件 (*)")
+        if not file_path:
+            return
+
+        try:
+            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            expected_columns = [
+                "title", "publish_time", "author_name", "like_count", "comment_count",
+                "share_count", "collect_count", "video_url", "danmaku_count", "duration",
+                "video_id", "play_count", "author_official_role", "is_verified"
+            ]
+            for col in expected_columns:
+                if col not in df.columns:
+                    if col in ["like_count", "comment_count", "share_count", "collect_count",
+                               "danmaku_count", "play_count", "author_official_role", "is_verified"]:
+                        df[col] = 0
+                    else:
+                        df[col] = ""
+            filename = os.path.basename(file_path)
+            self.history_manager.add_history(filename, df.to_dict('records'))
+            self.load_history()
+            self.status_label.setText(f"导入完成，文件：{filename}，数据量：{len(df)}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"导入失败：{str(e)}")
+            self.status_label.setText("等待操作...")
+
+    def export_data(self):
+        if self.current_data is None or self.current_data.empty or self.current_meta is None:
+            QMessageBox.warning(self, "警告", "请先选择历史数据")
+            return
+
+        export_df = self.current_data.copy()
+        export_df['jama_details'] = [', '.join(j) if j else '' for j in self.current_jama or [[]] * len(export_df)]
+        export_df['discern_details'] = [', '.join(d) if d else '' for d in self.current_discern or [[]] * len(export_df)]
+        export_df['video_category'] = self.current_video_category
+        export_df['account_type'] = self.current_account_type
+
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        default_filename = f"{self.current_meta['filename']}_{timestamp}.csv"
+        file_path, _ = QFileDialog.getSaveFileName(self, "保存数据", default_filename, "CSV文件 (*.csv)")
+        if file_path:
+            try:
+                export_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+                QMessageBox.information(self, "提示", f"数据成功导出到 {file_path}")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"导出数据失败：{str(e)}")
+
+    def on_header_clicked(self, logicalIndex):
+        if logicalIndex == 8:  # Skip "查看" column
+            return
+        if self.current_data is None or self.current_data.empty:
+            return
+
+        if self.sort_column == logicalIndex:
+            self.sort_order = Qt.DescendingOrder if self.sort_order == Qt.AscendingOrder else Qt.AscendingOrder
+        else:
+            self.sort_order = Qt.AscendingOrder
+        self.sort_column = logicalIndex
+
+        header = self.data_table.horizontalHeaderItem(logicalIndex).text()
+        column_map = {
+            "标题": "title",
+            "发布时间": "publish_time",
+            "作者": "author_name",
+            "点赞数": "like_count",
+            "评论数": "comment_count",
+            "分享数": "share_count",
+            "收藏数": "collect_count",
+            "视频时长": "duration",
+            "认证状态": "is_verified",
+            "JAMA评分": "jama_score",
+            "GQS评分": "gqs_score",
+            "DISCERN评分": "discern_score",
+            "视频类别": "video_category",
+            "账号类型": "account_type"
+        }
+        column = column_map.get(header)
+
+        if column and column in self.current_data.columns:
+            try:
+                if column == "publish_time":
+                    self.current_data["publish_time"] = pd.to_datetime(self.current_data["publish_time"], errors='coerce')
+                elif column == "duration":
+                    self.current_data["duration"] = pd.to_numeric(self.current_data["duration"], errors='coerce')
+                self.current_data = self.current_data.sort_values(
+                    by=column,
+                    ascending=(self.sort_order == Qt.AscendingOrder),
+                    na_position='last'
+                )
+                self.current_data = self.current_data.reset_index(drop=True)
+                indices = self.current_data.index.tolist()
+                self.current_jama = [self.current_jama[i] for i in indices]
+                self.current_gqs = [self.current_gqs[i] for i in indices]
+                self.current_discern = [self.current_discern[i] for i in indices]
+                self.current_video_category = [self.current_video_category[i] for i in indices]
+                self.current_account_type = [self.current_account_type[i] for i in indices]
+                self.load_data_table(
+                    self.current_data, self.current_jama, self.current_gqs,
+                    self.current_discern, self.current_video_category, self.current_account_type
+                )
+                self.data_table.horizontalHeader().setSortIndicator(logicalIndex, self.sort_order)
+            except Exception as e:
+                QMessageBox.warning(self, "警告", f"排序失败：{str(e)}")
+
+    def on_history_select(self):
+        selected_items = self.history_tree.selectedItems()
+        if not selected_items:
+            return
+        item = selected_items[0]
+        idx = self.history_tree.indexOfTopLevelItem(item)
+        metas = self.history_manager.get_history()
+        meta = metas[idx]
+
+        data_return = self.history_manager.get_data(meta)
+        df = data_return[0]
+        jama = data_return[1] if len(data_return) > 1 else None
+        gqs = data_return[2] if len(data_return) > 2 else None
+        discern = data_return[3] if len(data_return) > 3 else None
+        video_category = data_return[4] if len(data_return) > 4 else None
+        account_type = data_return[5] if len(data_return) > 5 else None
+
+        if jama is None or not isinstance(jama, list) or not all(isinstance(s, set) for s in jama):
+            jama = [set() for _ in range(len(df))]
+        if gqs is None or not isinstance(gqs, list) or not all(isinstance(s, int) for s in gqs):
+            gqs = [1 for _ in range(len(df))]  # Changed default from 0 to 1
+        if discern is None or not isinstance(discern, list) or not all(isinstance(s, set) for s in discern):
+            discern = [set() for _ in range(len(df))]
+        if video_category is None or not isinstance(video_category, list) or not all(isinstance(s, str) for s in video_category):
+            video_category = ["未选择" for _ in range(len(df))]
+        if account_type is None or not isinstance(account_type, list) or not all(isinstance(s, str) for s in account_type):
+            account_type = ["未选择" for _ in range(len(df))]
+
+        self.current_meta = meta
+        self.current_data = df
+        self.current_jama = jama
+        self.current_gqs = gqs
+        self.current_discern = discern
+        self.current_video_category = video_category
+        self.current_account_type = account_type
+
+        if self.current_data is not None:
+            self.current_data['jama_score'] = [len(j) for j in self.current_jama]
+            self.current_data['gqs_score'] = self.current_gqs
+            self.current_data['discern_score'] = [len(d) for d in self.current_discern]
+            self.current_data['video_category'] = self.current_video_category
+            self.current_data['account_type'] = self.current_account_type
+
+        self.load_data_table(df, jama, gqs, discern, video_category, account_type)
+
+    def load_history(self):
+        self.history_tree.clear()
+        metas = self.history_manager.get_history()
+        for meta in metas:
+            try:
+                ts_fmt = datetime.strptime(meta["timestamp"], "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                ts_fmt = meta.get("timestamp", "")
+            item = QTreeWidgetItem([
+                ts_fmt,
+                meta["filename"],
+                str(meta["count"])
+            ])
+            self.history_tree.addTopLevelItem(item)
+
+    def load_data_table(self, df, jama, gqs, discern, video_category, account_type):
+        self.data_table.setRowCount(len(df))
+        self.jama_checkboxes = []
+        self.discern_checkboxes = []
+        for i, row in df.iterrows():
+            selected_jama_items = jama[i] if i < len(jama) else set()
+            jama_score = len(selected_jama_items)
+            selected_discern_items = discern[i] if i < len(discern) else set()
+            discern_score = len(selected_discern_items)
+            current_video_category = video_category[i] if i < len(video_category) else "未选择"
+            current_account_type = account_type[i] if i < len(account_type) else "未选择"
+
+            self.data_table.setItem(i, 0, QTableWidgetItem(str(row.get("title", ""))))
+            self.data_table.setItem(i, 1, QTableWidgetItem(str(row.get("publish_time", ""))))
+            self.data_table.setItem(i, 2, QTableWidgetItem(str(row.get("author_name", ""))))
+            self.data_table.setItem(i, 3, QTableWidgetItem(str(int(row.get("like_count", 0)) if not pd.isna(row.get("like_count")) else 0)))
+            self.data_table.setItem(i, 4, QTableWidgetItem(str(int(row.get("comment_count", 0)) if not pd.isna(row.get("comment_count")) else 0)))
+            self.data_table.setItem(i, 5, QTableWidgetItem(str(int(row.get("share_count", 0)) if not pd.isna(row.get("share_count")) else 0)))
+            self.data_table.setItem(i, 6, QTableWidgetItem(str(int(row.get("collect_count", 0)) if not pd.isna(row.get("collect_count")) else 0)))
+            self.data_table.setItem(i, 7, QTableWidgetItem(str(row.get("is_verified", ""))))
+            self.data_table.setItem(i, 8, QTableWidgetItem("查看"))
+            self.data_table.setItem(i, 9, QTableWidgetItem(str(row.get("duration", ""))))
+            # JAMA annotation
+            jama_widget = QWidget()
+            jama_layout = QHBoxLayout(jama_widget)
+            jama_layout.setContentsMargins(0, 0, 0, 0)
+            row_jama_checkboxes = {}
+            for item in self.jama_items:
+                cb = QCheckBox(item)
+                cb.setChecked(item in selected_jama_items)
+                cb.stateChanged.connect(lambda state, r=i, it=item: self.update_jama(r, it, state))
+                jama_layout.addWidget(cb)
+                row_jama_checkboxes[item] = cb
+            jama_score_label = QLabel(f"({jama_score}/4)")
+            jama_layout.addWidget(jama_score_label)
+            self.data_table.setCellWidget(i, 10, jama_widget)
+            self.jama_checkboxes.append(row_jama_checkboxes)
+
+            # GQS annotation
+            gqs_widget = QWidget()
+            gqs_layout = QHBoxLayout(gqs_widget)
+            gqs_layout.setContentsMargins(0, 0, 0, 0)
+            gqs_combo = QComboBox()
+            gqs_combo.addItems(self.gqs_items)
+            current_gqs_score = gqs[i] if i < len(gqs) else 1  # Changed default from 0 to 1
+            if current_gqs_score > 0:
+                gqs_combo.setCurrentIndex(current_gqs_score - 1)
+            gqs_combo.currentIndexChanged.connect(lambda idx, r=i: self.update_gqs(r, idx + 1))
+            gqs_layout.addWidget(gqs_combo)
+            gqs_score_label = QLabel(f"({gqs_combo.currentIndex() + 1}/5)")
+            gqs_layout.addWidget(gqs_score_label)
+            self.data_table.setCellWidget(i, 11, gqs_widget)
+
+            # DISCERN annotation
+            discern_widget = QWidget()
+            discern_layout = QHBoxLayout(discern_widget)
+            discern_layout.setContentsMargins(0, 0, 0, 0)
+            row_discern_checkboxes = {}
+            for item in self.discern_items:
+                cb = QCheckBox(item)
+                cb.setChecked(item in selected_discern_items)
+                cb.stateChanged.connect(lambda state, r=i, it=item: self.update_discern(r, it, state))
+                discern_layout.addWidget(cb)
+                row_discern_checkboxes[item] = cb
+            discern_score_label = QLabel(f"({discern_score}/5)")
+            discern_layout.addWidget(discern_score_label)
+            self.data_table.setCellWidget(i, 12, discern_widget)
+            self.discern_checkboxes.append(row_discern_checkboxes)
+
+            # Video Category annotation
+            video_category_widget = QWidget()
+            video_category_layout = QHBoxLayout(video_category_widget)
+            video_category_layout.setContentsMargins(0, 0, 0, 0)
+            video_category_combo = QComboBox()
+            video_category_combo.addItems(["未选择"] + self.video_category_items)
+            video_category_combo.setCurrentText(current_video_category)
+            video_category_combo.currentTextChanged.connect(lambda text, r=i: self.update_video_category(r, text))
+            video_category_layout.addWidget(video_category_combo)
+            self.data_table.setCellWidget(i, 13, video_category_widget)
+
+            # Account Type annotation
+            account_type_widget = QWidget()
+            account_type_layout = QHBoxLayout(account_type_widget)
+            account_type_layout.setContentsMargins(0, 0, 0, 0)
+            account_type_combo = QComboBox()
+            account_type_combo.addItems(["未选择"] + self.account_type_items)
+            account_type_combo.setCurrentText(current_account_type)
+            account_type_combo.currentTextChanged.connect(lambda text, r=i: self.update_account_type(r, text))
+            account_type_layout.addWidget(account_type_combo)
+            self.data_table.setCellWidget(i, 14, account_type_widget)
+
+    def update_jama(self, row, item, state):
+        if not self.current_jama or row >= len(self.current_jama):
+            return
+        if not isinstance(self.current_jama[row], set):
+            self.current_jama[row] = set()
+        if state == Qt.Checked:
+            self.current_jama[row].add(item)
+        else:
+            self.current_jama[row].discard(item)
+        score = len(self.current_jama[row])
+        if 0 <= row < self.data_table.rowCount():
+            jama_widget = self.data_table.cellWidget(row, 10)
+            if jama_widget and jama_widget.layout():
+                score_label = jama_widget.layout().itemAt(jama_widget.layout().count() - 1).widget()
+                if score_label:
+                    score_label.setText(f"({score}/4)")
+        self.current_data['jama_score'] = [len(j) for j in self.current_jama]
+
+    def update_gqs(self, row, score):
+        if not self.current_gqs or row >= len(self.current_gqs):
+            return
+        self.current_gqs[row] = score
+        if 0 <= row < self.data_table.rowCount():
+            gqs_widget = self.data_table.cellWidget(row, 11)
+            if gqs_widget and gqs_widget.layout():
+                score_label = gqs_widget.layout().itemAt(1).widget()
+                if score_label:
+                    score_label.setText(f"({score}/5)")
+        self.current_data['gqs_score'] = self.current_gqs
+
+    def update_discern(self, row, item, state):
+        if not self.current_discern or row >= len(self.current_discern):
+            return
+        if not isinstance(self.current_discern[row], set):
+            self.current_discern[row] = set()
+        if state == Qt.Checked:
+            self.current_discern[row].add(item)
+        else:
+            self.current_discern[row].discard(item)
+        score = len(self.current_discern[row])
+        if 0 <= row < self.data_table.rowCount():
+            discern_widget = self.data_table.cellWidget(row, 12)
+            if discern_widget and discern_widget.layout():
+                score_label = discern_widget.layout().itemAt(discern_widget.layout().count() - 1).widget()
+                if score_label:
+                    score_label.setText(f"({score}/5)")
+        self.current_data['discern_score'] = [len(d) for d in self.current_discern]
+
+    def update_video_category(self, row, text):
+        if not self.current_video_category or row >= len(self.current_video_category):
+            return
+        self.current_video_category[row] = text
+        self.current_data['video_category'] = self.current_video_category
+
+    def update_account_type(self, row, text):
+        if not self.current_account_type or row >= len(self.current_account_type):
+            return
+        self.current_account_type[row] = text
+        self.current_data['account_type'] = self.current_account_type
+
+    def on_data_click(self, row, col):
+        if col == 8:  # 查看列
+            url = self.current_data.loc[row, "video_url"] if self.current_data is not None and row < len(self.current_data) else None
+            if not url:
+                url = self.current_data.loc[row, "note_url"] if self.current_data is not None and row < len(self.current_data) else None
+            if url:
+                webbrowser.open_new_tab(url)
+
+    def save_records(self):
+        if self.current_meta and self.current_jama and self.current_gqs and self.current_discern and self.current_video_category and self.current_account_type:
+            try:
+                self.history_manager.save_annotations(
+                    self.current_meta, self.current_jama, self.current_gqs,
+                    self.current_discern, self.current_video_category, self.current_account_type
+                )
+                QMessageBox.information(self, "提示", "记录保存成功")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"保存记录失败：{str(e)}")
+
+    def delete_selected_history(self):
+        selected_items = self.history_tree.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "提示", "请先选择要删除的历史记录")
+            return
+        item = selected_items[0]
+        idx = self.history_tree.indexOfTopLevelItem(item)
+        metas = self.history_manager.get_history()
+        meta = metas[idx]
+        reply = QMessageBox.question(
+            self, "确认删除", f"确定要删除文件 {meta['filename']} 的记录吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                success = self.history_manager.delete_history(meta)
+                if success:
+                    QMessageBox.information(self, "提示", "删除成功")
+                    self.load_history()
+                    self.data_table.clearContents()
+                    self.current_meta = None
+                    self.current_data = None
+                    self.current_jama = None
+                    self.current_gqs = None
+                    self.current_discern = None
+                    self.current_video_category = None
+                    self.current_account_type = None
+                else:
+                    QMessageBox.critical(self, "错误", "删除失败，请稍后重试")
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"删除历史记录失败：{str(e)}")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = App()
+    window.show()
+    sys.exit(app.exec_())
