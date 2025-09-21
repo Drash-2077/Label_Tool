@@ -12,7 +12,7 @@
 
 
 <figure style="text-align: center; margin: 20px 0; position: relative;">
-  <img src="更新示意图20250921.png" alt="自定义字段操作示意图" width="800" height="450" style="border-radius: 8px; border: 1px solid #f0f0f0;"/>
+  <img src="pic/更新示意图20250921.png" alt="自定义字段操作示意图" width="800" height="450" style="border-radius: 8px; border: 1px solid #f0f0f0;"/>
   <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; background-color: rgba(0,0,0,0.5); padding: 8px 16px; border-radius: 4px; font-size: 16px;">
   </div>
 </figure>
