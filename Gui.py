@@ -1,14 +1,10 @@
-# Label_Tool 前端页面
-# Author: Dr.Ash
-# Maintainer: Dr.Ash
-# Repository: https://github.com/Drash-2077/Label_Tool
-# License: MIT
-
 import sys
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFileDialog, QMessageBox, QTreeWidget, QTreeWidgetItem,
-    QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFrame, QGroupBox, QComboBox, QCheckBox
+    QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFrame,
+    QGroupBox, QComboBox, QCheckBox, QDialog, QLineEdit, QFormLayout, QRadioButton,
+    QButtonGroup, QListWidget, QInputDialog
 )
 from PyQt5.QtCore import Qt
 from datetime import datetime
@@ -21,6 +17,58 @@ from history_manager import HistoryManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class CustomColumnDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("添加自定义字段")
+        self.setFixedSize(400, 300)
+        layout = QFormLayout(self)
+
+        # Column name
+        self.name_edit = QLineEdit()
+        layout.addRow("字段名称:", self.name_edit)
+
+        # Column type
+        self.type_group = QButtonGroup(self)
+        self.numeric_radio = QRadioButton("数字字段")
+        self.enum_radio = QRadioButton("可枚举值")
+        self.type_group.addButton(self.numeric_radio)
+        self.type_group.addButton(self.enum_radio)
+        self.numeric_radio.setChecked(True)
+        layout.addRow("字段类型:", self.numeric_radio)
+        layout.addRow("", self.enum_radio)
+
+        # Enum values input
+        self.enum_list = QListWidget()
+        self.enum_list.setSelectionMode(QListWidget.MultiSelection)
+        layout.addRow("枚举值 (多选):", self.enum_list)
+        self.add_enum_btn = QPushButton("添加枚举值")
+        self.add_enum_btn.clicked.connect(self.add_enum_value)
+        layout.addRow("", self.add_enum_btn)
+
+        # Buttons
+        button_layout = QHBoxLayout()
+        self.ok_btn = QPushButton("确定")
+        self.ok_btn.clicked.connect(self.accept)
+        self.cancel_btn = QPushButton("取消")
+        self.cancel_btn.clicked.connect(self.reject)
+        button_layout.addWidget(self.ok_btn)
+        button_layout.addWidget(self.cancel_btn)
+        layout.addRow(button_layout)
+
+    def add_enum_value(self):
+        value, ok = QInputDialog.getText(self, "添加枚举值", "请输入枚举值:")
+        if ok and value.strip():
+            self.enum_list.addItem(value.strip())
+
+    def get_column_definition(self):
+        name = self.name_edit.text().strip()
+        if not name:
+            return None
+        column_type = "numeric" if self.numeric_radio.isChecked() else "enum"
+        enum_values = [self.enum_list.item(i).text() for i in range(self.enum_list.count())] if column_type == "enum" else []
+        return {"name": name, "type": column_type, "enum_values": enum_values}
 
 class App(QMainWindow):
     def __init__(self):
@@ -38,15 +86,13 @@ class App(QMainWindow):
             "提及不同的治疗或管理选项",
             "披露利益冲突或资助来源"
         ]
-        self.video_category_items = ["广告及其他", "疾病知识类", "预防治疗类", "中医药类"]
-        self.account_type_items = ["非专业个人", "专业个人", "专业机构", "非专业机构"]
+        self.custom_columns = []  # Store custom column definitions
         self.current_meta = None
         self.current_data = None
         self.current_jama = None
         self.current_gqs = None
         self.current_discern = None
-        self.current_video_category = None
-        self.current_account_type = None
+        self.current_custom_data = None  # Store custom column data
         self.sort_column = -1
         self.sort_order = Qt.AscendingOrder
 
@@ -64,10 +110,15 @@ class App(QMainWindow):
         top_layout.setSpacing(5)
         top_layout.setContentsMargins(5, 5, 5, 5)
 
-        self.import_btn = QPushButton("导入CSV")
+        self.import_btn = QPushButton("导入文件")
         self.import_btn.setMaximumHeight(30)
-        self.import_btn.clicked.connect(self.import_csv)
+        self.import_btn.clicked.connect(self.import_file)
         top_layout.addWidget(self.import_btn)
+
+        self.add_field_btn = QPushButton("新增字段")
+        self.add_field_btn.setMaximumHeight(30)
+        self.add_field_btn.clicked.connect(self.add_custom_column)
+        top_layout.addWidget(self.add_field_btn)
 
         delete_btn = QPushButton("删除历史记录")
         delete_btn.setMaximumHeight(30)
@@ -102,7 +153,7 @@ class App(QMainWindow):
         self.history_tree.setColumnWidth(0, 200)
         self.history_tree.setColumnWidth(1, 300)
         self.history_tree.setColumnWidth(2, 80)
-        self.history_tree.setFixedHeight(150)  # 设置历史记录区域高度
+        self.history_tree.setFixedHeight(150)
         self.history_tree.itemSelectionChanged.connect(self.on_history_select)
         main_layout.addWidget(self.history_tree)
 
@@ -110,39 +161,63 @@ class App(QMainWindow):
         self.data_table = QTableWidget()
         self.data_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.data_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.data_table.setColumnCount(15)  # 包含认证状态列
-        self.data_table.setHorizontalHeaderLabels([
-            "标题", "发布时间", "作者", "点赞数", "评论数", "分享数", "收藏数",
-            "认证状态", "查看", "视频时长（秒）", "JAMA评分", "GQS评分", "DISCERN评分", "视频类别", "账号类型"
-        ])
-        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.data_table.setColumnWidth(0, 300)
-        self.data_table.setColumnWidth(1, 160)
-        self.data_table.setColumnWidth(2, 140)
-        self.data_table.setColumnWidth(3, 100)
-        self.data_table.setColumnWidth(4, 100)
-        self.data_table.setColumnWidth(5, 100)
-        self.data_table.setColumnWidth(6, 100)
-        self.data_table.setColumnWidth(7, 160)  # 认证状态
-        self.data_table.setColumnWidth(8, 80)  # 查看
-        self.data_table.setColumnWidth(9, 120)  # 视频时长
-        self.data_table.setColumnWidth(10, 480)  # JAMA评分
-        self.data_table.setColumnWidth(11, 160)  # GQS评分
-        self.data_table.setColumnWidth(12, 1000) # DISCERN评分
-        self.data_table.setColumnWidth(13, 100)  # 视频类别
-        self.data_table.setColumnWidth(14, 100)  # 账号类型
+        self.update_table_columns()
         self.data_table.cellClicked.connect(self.on_data_click)
         self.data_table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         self.data_table.horizontalHeader().setSortIndicatorShown(True)
         main_layout.addWidget(self.data_table)
 
-    def import_csv(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "选择CSV文件", "", "CSV文件 (*.csv);;所有文件 (*)")
+    def update_table_columns(self):
+        base_columns = [
+            "标题", "发布时间", "作者", "点赞数", "评论数", "分享数", "收藏数",
+            "认证状态", "查看", "视频时长（秒）", "JAMA评分", "GQS评分", "DISCERN评分"
+        ]
+        custom_column_names = [col["name"] for col in self.custom_columns]
+        all_columns = base_columns + custom_column_names
+        self.data_table.setColumnCount(len(all_columns))
+        self.data_table.setHorizontalHeaderLabels(all_columns)
+        self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        column_widths = [300, 160, 140, 100, 100, 100, 100, 160, 80, 120, 480, 160, 1000] + [150] * len(custom_column_names)
+        for i, width in enumerate(column_widths):
+            self.data_table.setColumnWidth(i, width)
+
+    def add_custom_column(self):
+        dialog = CustomColumnDialog(self)
+        if dialog.exec_():
+            column_def = dialog.get_column_definition()
+            if column_def:
+                if column_def["name"] in [col["name"] for col in self.custom_columns]:
+                    QMessageBox.warning(self, "警告", "字段名称已存在！")
+                    return
+                self.custom_columns.append(column_def)
+                self.update_table_columns()
+                if self.current_data is not None:
+                    self.current_custom_data[column_def["name"]] = ["" for _ in range(len(self.current_data))]
+                    self.load_data_table(
+                        self.current_data, self.current_jama, self.current_gqs,
+                        self.current_discern, self.current_custom_data
+                    )
+                self.history_manager.save_custom_columns(self.current_meta, self.custom_columns)
+                QMessageBox.information(self, "提示", f"已添加字段：{column_def['name']}")
+
+    def import_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择文件", "",
+            "支持的文件 (*.csv *.xlsx *.xls *.txt);;CSV文件 (*.csv);;Excel文件 (*.xlsx *.xls);;文本文件 (*.txt);;所有文件 (*)"
+        )
         if not file_path:
             return
 
         try:
-            df = pd.read_csv(file_path, encoding="utf-8-sig")
+            if file_path.endswith('.csv'):
+                df = pd.read_csv(file_path, encoding="utf-8-sig")
+            elif file_path.endswith(('.xlsx', '.xls')):
+                df = pd.read_excel(file_path)
+            elif file_path.endswith('.txt'):
+                df = pd.read_csv(file_path, sep='\t', encoding="utf-8")
+            else:
+                raise ValueError("不支持的文件格式")
+
             expected_columns = [
                 "title", "publish_time", "author_name", "like_count", "comment_count",
                 "share_count", "collect_count", "video_url", "danmaku_count", "duration",
@@ -156,7 +231,7 @@ class App(QMainWindow):
                     else:
                         df[col] = ""
             filename = os.path.basename(file_path)
-            self.history_manager.add_history(filename, df.to_dict('records'))
+            self.history_manager.add_history(filename, df.to_dict('records'), self.custom_columns)
             self.load_history()
             self.status_label.setText(f"导入完成，文件：{filename}，数据量：{len(df)}")
         except Exception as e:
@@ -171,8 +246,8 @@ class App(QMainWindow):
         export_df = self.current_data.copy()
         export_df['jama_details'] = [', '.join(j) if j else '' for j in self.current_jama or [[]] * len(export_df)]
         export_df['discern_details'] = [', '.join(d) if d else '' for d in self.current_discern or [[]] * len(export_df)]
-        export_df['video_category'] = self.current_video_category
-        export_df['account_type'] = self.current_account_type
+        for col_name in self.current_custom_data or {}:
+            export_df[col_name] = self.current_custom_data[col_name]
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         default_filename = f"{self.current_meta['filename']}_{timestamp}.csv"
@@ -205,37 +280,38 @@ class App(QMainWindow):
             "评论数": "comment_count",
             "分享数": "share_count",
             "收藏数": "collect_count",
-            "视频时长": "duration",
+            "视频时长（秒）": "duration",
             "认证状态": "is_verified",
             "JAMA评分": "jama_score",
             "GQS评分": "gqs_score",
-            "DISCERN评分": "discern_score",
-            "视频类别": "video_category",
-            "账号类型": "account_type"
+            "DISCERN评分": "discern_score"
         }
+        column_map.update({col["name"]: col["name"] for col in self.custom_columns})
         column = column_map.get(header)
 
-        if column and column in self.current_data.columns:
+        if column and (column in self.current_data.columns or column in self.current_custom_data):
             try:
                 if column == "publish_time":
                     self.current_data["publish_time"] = pd.to_datetime(self.current_data["publish_time"], errors='coerce')
-                elif column == "duration":
-                    self.current_data["duration"] = pd.to_numeric(self.current_data["duration"], errors='coerce')
-                self.current_data = self.current_data.sort_values(
-                    by=column,
+                elif column == "duration" or any(col["name"] == column and col["type"] == "numeric" for col in self.custom_columns):
+                    if column in self.current_data.columns:
+                        self.current_data[column] = pd.to_numeric(self.current_data[column], errors='coerce')
+                    else:
+                        self.current_custom_data[column] = pd.to_numeric(self.current_custom_data[column], errors='coerce')
+                indices = (self.current_data if column in self.current_data.columns else pd.Series(self.current_custom_data[column])).sort_values(
                     ascending=(self.sort_order == Qt.AscendingOrder),
                     na_position='last'
-                )
-                self.current_data = self.current_data.reset_index(drop=True)
-                indices = self.current_data.index.tolist()
+                ).index.tolist()
+                self.current_data = self.current_data.iloc[indices].reset_index(drop=True)
                 self.current_jama = [self.current_jama[i] for i in indices]
                 self.current_gqs = [self.current_gqs[i] for i in indices]
                 self.current_discern = [self.current_discern[i] for i in indices]
-                self.current_video_category = [self.current_video_category[i] for i in indices]
-                self.current_account_type = [self.current_account_type[i] for i in indices]
+                if self.current_custom_data:
+                    for col in self.current_custom_data:
+                        self.current_custom_data[col] = [self.current_custom_data[col][i] for i in indices]
                 self.load_data_table(
                     self.current_data, self.current_jama, self.current_gqs,
-                    self.current_discern, self.current_video_category, self.current_account_type
+                    self.current_discern, self.current_custom_data
                 )
                 self.data_table.horizontalHeader().setSortIndicator(logicalIndex, self.sort_order)
             except Exception as e:
@@ -255,36 +331,34 @@ class App(QMainWindow):
         jama = data_return[1] if len(data_return) > 1 else None
         gqs = data_return[2] if len(data_return) > 2 else None
         discern = data_return[3] if len(data_return) > 3 else None
-        video_category = data_return[4] if len(data_return) > 4 else None
-        account_type = data_return[5] if len(data_return) > 5 else None
+        custom_data = data_return[4] if len(data_return) > 4 else None
+        self.custom_columns = meta.get("custom_columns", [])
 
         if jama is None or not isinstance(jama, list) or not all(isinstance(s, set) for s in jama):
             jama = [set() for _ in range(len(df))]
         if gqs is None or not isinstance(gqs, list) or not all(isinstance(s, int) for s in gqs):
-            gqs = [1 for _ in range(len(df))]  # Changed default from 0 to 1
+            gqs = [1 for _ in range(len(df))]
         if discern is None or not isinstance(discern, list) or not all(isinstance(s, set) for s in discern):
             discern = [set() for _ in range(len(df))]
-        if video_category is None or not isinstance(video_category, list) or not all(isinstance(s, str) for s in video_category):
-            video_category = ["未选择" for _ in range(len(df))]
-        if account_type is None or not isinstance(account_type, list) or not all(isinstance(s, str) for s in account_type):
-            account_type = ["未选择" for _ in range(len(df))]
+        if custom_data is None:
+            custom_data = {col["name"]: [""] * len(df) for col in self.custom_columns}
 
         self.current_meta = meta
         self.current_data = df
         self.current_jama = jama
         self.current_gqs = gqs
         self.current_discern = discern
-        self.current_video_category = video_category
-        self.current_account_type = account_type
+        self.current_custom_data = custom_data
 
         if self.current_data is not None:
             self.current_data['jama_score'] = [len(j) for j in self.current_jama]
             self.current_data['gqs_score'] = self.current_gqs
             self.current_data['discern_score'] = [len(d) for d in self.current_discern]
-            self.current_data['video_category'] = self.current_video_category
-            self.current_data['account_type'] = self.current_account_type
+            for col in self.current_custom_data:
+                self.current_data[col] = self.current_custom_data[col]
 
-        self.load_data_table(df, jama, gqs, discern, video_category, account_type)
+        self.update_table_columns()
+        self.load_data_table(df, jama, gqs, discern, custom_data)
 
     def load_history(self):
         self.history_tree.clear()
@@ -301,17 +375,16 @@ class App(QMainWindow):
             ])
             self.history_tree.addTopLevelItem(item)
 
-    def load_data_table(self, df, jama, gqs, discern, video_category, account_type):
+    def load_data_table(self, df, jama, gqs, discern, custom_data=None):
         self.data_table.setRowCount(len(df))
         self.jama_checkboxes = []
         self.discern_checkboxes = []
+        self.custom_widgets = {col["name"]: [] for col in self.custom_columns}
         for i, row in df.iterrows():
             selected_jama_items = jama[i] if i < len(jama) else set()
             jama_score = len(selected_jama_items)
             selected_discern_items = discern[i] if i < len(discern) else set()
             discern_score = len(selected_discern_items)
-            current_video_category = video_category[i] if i < len(video_category) else "未选择"
-            current_account_type = account_type[i] if i < len(account_type) else "未选择"
 
             self.data_table.setItem(i, 0, QTableWidgetItem(str(row.get("title", ""))))
             self.data_table.setItem(i, 1, QTableWidgetItem(str(row.get("publish_time", ""))))
@@ -323,6 +396,7 @@ class App(QMainWindow):
             self.data_table.setItem(i, 7, QTableWidgetItem(str(row.get("is_verified", ""))))
             self.data_table.setItem(i, 8, QTableWidgetItem("查看"))
             self.data_table.setItem(i, 9, QTableWidgetItem(str(row.get("duration", ""))))
+
             # JAMA annotation
             jama_widget = QWidget()
             jama_layout = QHBoxLayout(jama_widget)
@@ -345,7 +419,7 @@ class App(QMainWindow):
             gqs_layout.setContentsMargins(0, 0, 0, 0)
             gqs_combo = QComboBox()
             gqs_combo.addItems(self.gqs_items)
-            current_gqs_score = gqs[i] if i < len(gqs) else 1  # Changed default from 0 to 1
+            current_gqs_score = gqs[i] if i < len(gqs) else 1
             if current_gqs_score > 0:
                 gqs_combo.setCurrentIndex(current_gqs_score - 1)
             gqs_combo.currentIndexChanged.connect(lambda idx, r=i: self.update_gqs(r, idx + 1))
@@ -370,27 +444,27 @@ class App(QMainWindow):
             self.data_table.setCellWidget(i, 12, discern_widget)
             self.discern_checkboxes.append(row_discern_checkboxes)
 
-            # Video Category annotation
-            video_category_widget = QWidget()
-            video_category_layout = QHBoxLayout(video_category_widget)
-            video_category_layout.setContentsMargins(0, 0, 0, 0)
-            video_category_combo = QComboBox()
-            video_category_combo.addItems(["未选择"] + self.video_category_items)
-            video_category_combo.setCurrentText(current_video_category)
-            video_category_combo.currentTextChanged.connect(lambda text, r=i: self.update_video_category(r, text))
-            video_category_layout.addWidget(video_category_combo)
-            self.data_table.setCellWidget(i, 13, video_category_widget)
-
-            # Account Type annotation
-            account_type_widget = QWidget()
-            account_type_layout = QHBoxLayout(account_type_widget)
-            account_type_layout.setContentsMargins(0, 0, 0, 0)
-            account_type_combo = QComboBox()
-            account_type_combo.addItems(["未选择"] + self.account_type_items)
-            account_type_combo.setCurrentText(current_account_type)
-            account_type_combo.currentTextChanged.connect(lambda text, r=i: self.update_account_type(r, text))
-            account_type_layout.addWidget(account_type_combo)
-            self.data_table.setCellWidget(i, 14, account_type_widget)
+            # Custom columns
+            for col_idx, col_def in enumerate(self.custom_columns, 13):
+                col_name = col_def["name"]
+                col_type = col_def["type"]
+                current_value = custom_data.get(col_name, [""] * len(df))[i] if custom_data else ""
+                widget = QWidget()
+                layout = QHBoxLayout(widget)
+                layout.setContentsMargins(0, 0, 0, 0)
+                if col_type == "numeric":
+                    line_edit = QLineEdit()
+                    line_edit.setText(str(current_value))
+                    line_edit.textChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
+                    layout.addWidget(line_edit)
+                else:  # enum
+                    combo = QComboBox()
+                    combo.addItems(["未选择"] + col_def["enum_values"])
+                    combo.setCurrentText(str(current_value) if current_value else "未选择")
+                    combo.currentTextChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
+                    layout.addWidget(combo)
+                self.data_table.setCellWidget(i, col_idx, widget)
+                self.custom_widgets[col_name].append(widget)
 
     def update_jama(self, row, item, state):
         if not self.current_jama or row >= len(self.current_jama):
@@ -440,17 +514,16 @@ class App(QMainWindow):
                     score_label.setText(f"({score}/5)")
         self.current_data['discern_score'] = [len(d) for d in self.current_discern]
 
-    def update_video_category(self, row, text):
-        if not self.current_video_category or row >= len(self.current_video_category):
+    def update_custom_data(self, row, column_name, value):
+        if not self.current_custom_data or row >= len(self.current_data):
             return
-        self.current_video_category[row] = text
-        self.current_data['video_category'] = self.current_video_category
-
-    def update_account_type(self, row, text):
-        if not self.current_account_type or row >= len(self.current_account_type):
-            return
-        self.current_account_type[row] = text
-        self.current_data['account_type'] = self.current_account_type
+        try:
+            if any(col["name"] == column_name and col["type"] == "numeric" for col in self.custom_columns):
+                value = float(value) if value.strip() else ""
+            self.current_custom_data[column_name][row] = value
+            self.current_data[column_name] = self.current_custom_data[column_name]
+        except ValueError:
+            QMessageBox.warning(self, "警告", f"请输入有效的数字到 {column_name}")
 
     def on_data_click(self, row, col):
         if col == 8:  # 查看列
@@ -461,11 +534,11 @@ class App(QMainWindow):
                 webbrowser.open_new_tab(url)
 
     def save_records(self):
-        if self.current_meta and self.current_jama and self.current_gqs and self.current_discern and self.current_video_category and self.current_account_type:
+        if self.current_meta and self.current_jama and self.current_gqs and self.current_discern:
             try:
                 self.history_manager.save_annotations(
                     self.current_meta, self.current_jama, self.current_gqs,
-                    self.current_discern, self.current_video_category, self.current_account_type
+                    self.current_discern, self.current_custom_data
                 )
                 QMessageBox.information(self, "提示", "记录保存成功")
             except Exception as e:
@@ -496,8 +569,9 @@ class App(QMainWindow):
                     self.current_jama = None
                     self.current_gqs = None
                     self.current_discern = None
-                    self.current_video_category = None
-                    self.current_account_type = None
+                    self.current_custom_data = None
+                    self.custom_columns = []
+                    self.update_table_columns()
                 else:
                     QMessageBox.critical(self, "错误", "删除失败，请稍后重试")
             except Exception as e:

@@ -1,9 +1,3 @@
-# Label_Tool 项目主入口
-# Author: Dr.Ash
-# Maintainer: Dr.Ash
-# Repository: https://github.com/Drash-2077/Label_Tool
-# License: MIT
-
 import sys
 from PyQt5.QtWidgets import QApplication
 from Gui import App 

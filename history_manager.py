@@ -1,9 +1,3 @@
-# Label_Tool 历史管理
-# Author: Dr.Ash
-# Maintainer: Dr.Ash
-# Repository: https://github.com/Drash-2077/Label_Tool
-# License: MIT
-
 import os
 import json
 import pandas as pd
@@ -52,8 +46,7 @@ class HistoryManager:
         jama = []
         gqs = []
         discern = []
-        video_category = []
-        account_type = []
+        custom_data = {}
 
         if os.path.exists(data_file_path):
             try:
@@ -73,37 +66,40 @@ class HistoryManager:
                     annotations_data = json.load(f)
                 for ann in annotations_data:
                     jama.append(set(ann.get("jama", [])))
-                    gqs.append(int(ann.get("gqs", 1)))  # Changed default from 0 to 1
+                    gqs.append(int(ann.get("gqs", 1)))
                     discern.append(set(ann.get("discern", [])))
-                    video_category.append(ann.get("video_category", "未选择"))
-                    account_type.append(ann.get("account_type", "未选择"))
+                    for col in meta.get("custom_columns", []):
+                        col_name = col["name"]
+                        if col_name not in custom_data:
+                            custom_data[col_name] = []
+                        custom_data[col_name].append(ann.get(col_name, ""))
                 logging.info(f"📥 成功加载注解数据：{anno_file_path}（共{len(annotations_data)}条）")
             except Exception as e:
                 logging.error(f"❌ 加载注解数据失败（{anno_file_path}）：{str(e)}")
                 jama = [set() for _ in range(len(df))]
-                gqs = [1 for _ in range(len(df))]  # Changed default from 0 to 1
+                gqs = [1 for _ in range(len(df))]
                 discern = [set() for _ in range(len(df))]
-                video_category = ["未选择" for _ in range(len(df))]
-                account_type = ["未选择" for _ in range(len(df))]
+                for col in meta.get("custom_columns", []):
+                    custom_data[col["name"]] = [""] * len(df)
         else:
             logging.warning(f"⚠️ 注解文件不存在：{anno_file_path}，初始化空注解")
             jama = [set() for _ in range(len(df))]
-            gqs = [1 for _ in range(len(df))]  # Changed default from 0 to 1
+            gqs = [1 for _ in range(len(df))]
             discern = [set() for _ in range(len(df))]
-            video_category = ["未选择" for _ in range(len(df))]
-            account_type = ["未选择" for _ in range(len(df))]
+            for col in meta.get("custom_columns", []):
+                custom_data[col["name"]] = [""] * len(df)
 
         if len(df) > len(jama):
             jama.extend([set() for _ in range(len(df) - len(jama))])
-            gqs.extend([1 for _ in range(len(df) - len(gqs))])  # Changed default from 0 to 1
+            gqs.extend([1 for _ in range(len(df) - len(gqs))])
             discern.extend([set() for _ in range(len(df) - len(discern))])
-            video_category.extend(["未选择" for _ in range(len(df) - len(video_category))])
-            account_type.extend(["未选择" for _ in range(len(df) - len(account_type))])
+            for col in meta.get("custom_columns", []):
+                custom_data[col["name"]].extend([""] * (len(df) - len(custom_data[col["name"]])))
             logging.info(f"📝 扩展注解长度以匹配数据：原注解{len(jama)-len(df)+len(jama)}条 → 新注解{len(jama)}条")
 
-        return df, jama, gqs, discern, video_category, account_type
+        return df, jama, gqs, discern, custom_data
 
-    def add_history(self, filename, data):
+    def add_history(self, filename, data, custom_columns):
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         crawl_folder = os.path.join(self.history_dir, timestamp)
         os.makedirs(crawl_folder, exist_ok=True)
@@ -112,7 +108,8 @@ class HistoryManager:
         meta = {
             "timestamp": timestamp,
             "filename": filename,
-            "count": len(data)
+            "count": len(data),
+            "custom_columns": custom_columns
         }
         meta_file_path = os.path.join(crawl_folder, "meta.json")
         data_file_path = os.path.join(crawl_folder, "data.csv")
@@ -145,7 +142,12 @@ class HistoryManager:
             logging.error(f"❌ 保存数据失败（{data_file_path}）：{str(e)}")
 
         empty_annotations = [
-            {"jama": [], "gqs": 1, "discern": [], "video_category": "未选择", "account_type": "未选择"}  # Changed default gqs from 0 to 1
+            {
+                "jama": [],
+                "gqs": 1,
+                "discern": [],
+                **{col["name"]: "" for col in custom_columns}
+            }
             for _ in range(len(data))
         ]
         try:
@@ -157,7 +159,7 @@ class HistoryManager:
 
         return meta
 
-    def save_annotations(self, meta, jama, gqs, discern, video_category, account_type):
+    def save_annotations(self, meta, jama, gqs, discern, custom_data):
         crawl_folder = os.path.join(self.history_dir, meta["timestamp"])
         anno_file_path = os.path.join(crawl_folder, "annotations.json")
 
@@ -166,8 +168,7 @@ class HistoryManager:
                 "jama": list(jama[i]),
                 "gqs": gqs[i],
                 "discern": list(discern[i]),
-                "video_category": video_category[i],
-                "account_type": account_type[i]
+                **{col_name: custom_data[col_name][i] for col_name in custom_data}
             }
             for i in range(len(jama))
         ]
@@ -178,6 +179,21 @@ class HistoryManager:
             logging.info(f"📝 成功保存注解：{anno_file_path}（共{len(annotations)}条）")
         except Exception as e:
             logging.error(f"❌ 保存注解失败（{anno_file_path}）：{str(e)}")
+
+    def save_custom_columns(self, meta, custom_columns):
+        if not meta:
+            return
+        crawl_folder = os.path.join(self.history_dir, meta["timestamp"])
+        meta_file_path = os.path.join(crawl_folder, "meta.json")
+        try:
+            with open(meta_file_path, "r", encoding="utf-8") as f:
+                meta_data = json.load(f)
+            meta_data["custom_columns"] = custom_columns
+            with open(meta_file_path, "w", encoding="utf-8") as f:
+                json.dump(meta_data, f, ensure_ascii=False, indent=2)
+            logging.info(f"📝 成功保存自定义字段：{meta_file_path}")
+        except Exception as e:
+            logging.error(f"❌ 保存自定义字段失败（{meta_file_path}）：{str(e)}")
 
     def delete_history(self, meta):
         crawl_folder = os.path.join(self.history_dir, meta["timestamp"])
