@@ -70,9 +70,13 @@ class HistoryManager:
                     discern.append(set(ann.get("discern", [])))
                     for col in meta.get("custom_columns", []):
                         col_name = col["name"]
+                        col_type = col["type"]
                         if col_name not in custom_data:
                             custom_data[col_name] = []
-                        custom_data[col_name].append(ann.get(col_name, ""))
+                        value = ann.get(col_name, set() if col_type == "multi" else "")
+                        if col_type == "multi" and isinstance(value, list):
+                            value = set(value)
+                        custom_data[col_name].append(value)
                 logging.info(f"📥 成功加载注解数据：{anno_file_path}（共{len(annotations_data)}条）")
             except Exception as e:
                 logging.error(f"❌ 加载注解数据失败（{anno_file_path}）：{str(e)}")
@@ -80,21 +84,27 @@ class HistoryManager:
                 gqs = [1 for _ in range(len(df))]
                 discern = [set() for _ in range(len(df))]
                 for col in meta.get("custom_columns", []):
-                    custom_data[col["name"]] = [""] * len(df)
+                    col_name = col["name"]
+                    col_type = col["type"]
+                    custom_data[col_name] = [set() if col_type == "multi" else "" for _ in range(len(df))]
         else:
             logging.warning(f"⚠️ 注解文件不存在：{anno_file_path}，初始化空注解")
             jama = [set() for _ in range(len(df))]
             gqs = [1 for _ in range(len(df))]
             discern = [set() for _ in range(len(df))]
             for col in meta.get("custom_columns", []):
-                custom_data[col["name"]] = [""] * len(df)
+                col_name = col["name"]
+                col_type = col["type"]
+                custom_data[col_name] = [set() if col_type == "multi" else "" for _ in range(len(df))]
 
         if len(df) > len(jama):
             jama.extend([set() for _ in range(len(df) - len(jama))])
             gqs.extend([1 for _ in range(len(df) - len(gqs))])
             discern.extend([set() for _ in range(len(df) - len(discern))])
             for col in meta.get("custom_columns", []):
-                custom_data[col["name"]].extend([""] * (len(df) - len(custom_data[col["name"]])))
+                col_name = col["name"]
+                col_type = col["type"]
+                custom_data[col_name].extend([set() if col_type == "multi" else "" for _ in range(len(df) - len(custom_data[col_name]))])
             logging.info(f"📝 扩展注解长度以匹配数据：原注解{len(jama)-len(df)+len(jama)}条 → 新注解{len(jama)}条")
 
         return df, jama, gqs, discern, custom_data
@@ -146,7 +156,7 @@ class HistoryManager:
                 "jama": [],
                 "gqs": 1,
                 "discern": [],
-                **{col["name"]: "" for col in custom_columns}
+                **{col["name"]: [] if col["type"] == "multi" else "" for col in custom_columns}
             }
             for _ in range(len(data))
         ]
@@ -168,7 +178,7 @@ class HistoryManager:
                 "jama": list(jama[i]),
                 "gqs": gqs[i],
                 "discern": list(discern[i]),
-                **{col_name: custom_data[col_name][i] for col_name in custom_data}
+                **{col_name: list(custom_data[col_name][i]) if isinstance(custom_data[col_name][i], set) else custom_data[col_name][i] for col_name in custom_data}
             }
             for i in range(len(jama))
         ]
