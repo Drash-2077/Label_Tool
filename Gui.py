@@ -4,7 +4,7 @@ from PyQt5.QtWidgets import (
     QPushButton, QFileDialog, QMessageBox, QTreeWidget, QTreeWidgetItem,
     QTableWidget, QTableWidgetItem, QAbstractItemView, QHeaderView, QFrame,
     QGroupBox, QComboBox, QCheckBox, QDialog, QLineEdit, QFormLayout, QRadioButton,
-    QButtonGroup, QListWidget, QInputDialog
+    QButtonGroup, QListWidget, QInputDialog, QMenu
 )
 from PyQt5.QtCore import Qt
 from datetime import datetime
@@ -32,12 +32,15 @@ class CustomColumnDialog(QDialog):
         # Column type
         self.type_group = QButtonGroup(self)
         self.numeric_radio = QRadioButton("数字字段")
-        self.enum_radio = QRadioButton("可枚举值")
+        self.enum_radio = QRadioButton("单选枚举值")
+        self.multi_radio = QRadioButton("多选枚举值")
         self.type_group.addButton(self.numeric_radio)
         self.type_group.addButton(self.enum_radio)
+        self.type_group.addButton(self.multi_radio)
         self.numeric_radio.setChecked(True)
         layout.addRow("字段类型:", self.numeric_radio)
         layout.addRow("", self.enum_radio)
+        layout.addRow("", self.multi_radio)
 
         # Enum values input
         self.enum_list = QListWidget()
@@ -66,8 +69,13 @@ class CustomColumnDialog(QDialog):
         name = self.name_edit.text().strip()
         if not name:
             return None
-        column_type = "numeric" if self.numeric_radio.isChecked() else "enum"
-        enum_values = [self.enum_list.item(i).text() for i in range(self.enum_list.count())] if column_type == "enum" else []
+        if self.numeric_radio.isChecked():
+            column_type = "numeric"
+        elif self.enum_radio.isChecked():
+            column_type = "enum"
+        else:
+            column_type = "multi"
+        enum_values = [self.enum_list.item(i).text() for i in range(self.enum_list.count())] if column_type in ["enum", "multi"] else []
         return {"name": name, "type": column_type, "enum_values": enum_values}
 
 class App(QMainWindow):
@@ -119,6 +127,11 @@ class App(QMainWindow):
         self.add_field_btn.setMaximumHeight(30)
         self.add_field_btn.clicked.connect(self.add_custom_column)
         top_layout.addWidget(self.add_field_btn)
+
+        self.delete_field_btn = QPushButton("删除字段")
+        self.delete_field_btn.setMaximumHeight(30)
+        self.delete_field_btn.clicked.connect(self.delete_custom_column)
+        top_layout.addWidget(self.delete_field_btn)
 
         delete_btn = QPushButton("删除历史记录")
         delete_btn.setMaximumHeight(30)
@@ -192,13 +205,64 @@ class App(QMainWindow):
                 self.custom_columns.append(column_def)
                 self.update_table_columns()
                 if self.current_data is not None:
-                    self.current_custom_data[column_def["name"]] = ["" for _ in range(len(self.current_data))]
+                    # Initialize with empty set for multi-select or empty string for others
+                    initial_value = set() if column_def["type"] == "multi" else ""
+                    self.current_custom_data[column_def["name"]] = [initial_value for _ in range(len(self.current_data))]
                     self.load_data_table(
                         self.current_data, self.current_jama, self.current_gqs,
                         self.current_discern, self.current_custom_data
                     )
                 self.history_manager.save_custom_columns(self.current_meta, self.custom_columns)
                 QMessageBox.information(self, "提示", f"已添加字段：{column_def['name']}")
+
+    def delete_custom_column(self):
+        if not self.custom_columns:
+            QMessageBox.warning(self, "警告", "没有可删除的自定义字段！")
+            return
+        
+        # Create a dialog to select column to delete
+        dialog = QDialog(self)
+        dialog.setWindowTitle("删除自定义字段")
+        layout = QVBoxLayout(dialog)
+        
+        combo = QComboBox()
+        combo.addItems([col["name"] for col in self.custom_columns])
+        layout.addWidget(QLabel("选择要删除的字段:"))
+        layout.addWidget(combo)
+        
+        button_layout = QHBoxLayout()
+        ok_btn = QPushButton("确定")
+        cancel_btn = QPushButton("取消")
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        def on_ok():
+            col_name = combo.currentText()
+            if col_name:
+                reply = QMessageBox.question(
+                    self, "确认删除", f"确定要删除字段 '{col_name}' 吗？此操作不可恢复！",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if reply == QMessageBox.Yes:
+                    self.custom_columns = [col for col in self.custom_columns if col["name"] != col_name]
+                    if self.current_custom_data and col_name in self.current_custom_data:
+                        del self.current_custom_data[col_name]
+                    if self.current_data is not None and col_name in self.current_data.columns:
+                        self.current_data.drop(columns=[col_name], inplace=True)
+                    self.update_table_columns()
+                    self.history_manager.save_custom_columns(self.current_meta, self.custom_columns)
+                    if self.current_data is not None:
+                        self.load_data_table(
+                            self.current_data, self.current_jama, self.current_gqs,
+                            self.current_discern, self.current_custom_data
+                        )
+                    QMessageBox.information(self, "提示", f"已删除字段：{col_name}")
+                    dialog.accept()
+        
+        ok_btn.clicked.connect(on_ok)
+        cancel_btn.clicked.connect(dialog.reject)
+        dialog.exec_()
 
     def import_file(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -247,7 +311,12 @@ class App(QMainWindow):
         export_df['jama_details'] = [', '.join(j) if j else '' for j in self.current_jama or [[]] * len(export_df)]
         export_df['discern_details'] = [', '.join(d) if d else '' for d in self.current_discern or [[]] * len(export_df)]
         for col_name in self.current_custom_data or {}:
-            export_df[col_name] = self.current_custom_data[col_name]
+            # Convert sets to comma-separated strings for multi-select columns
+            col_def = next((col for col in self.custom_columns if col["name"] == col_name), None)
+            if col_def and col_def["type"] == "multi":
+                export_df[col_name] = [', '.join(val) if isinstance(val, set) else val for val in self.current_custom_data[col_name]]
+            else:
+                export_df[col_name] = self.current_custom_data[col_name]
 
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         default_filename = f"{self.current_meta['filename']}_{timestamp}.csv"
@@ -341,7 +410,7 @@ class App(QMainWindow):
         if discern is None or not isinstance(discern, list) or not all(isinstance(s, set) for s in discern):
             discern = [set() for _ in range(len(df))]
         if custom_data is None:
-            custom_data = {col["name"]: [""] * len(df) for col in self.custom_columns}
+            custom_data = {col["name"]: [set() if col["type"] == "multi" else "" for _ in range(len(df))] for col in self.custom_columns}
 
         self.current_meta = meta
         self.current_data = df
@@ -448,7 +517,7 @@ class App(QMainWindow):
             for col_idx, col_def in enumerate(self.custom_columns, 13):
                 col_name = col_def["name"]
                 col_type = col_def["type"]
-                current_value = custom_data.get(col_name, [""] * len(df))[i] if custom_data else ""
+                current_value = custom_data.get(col_name, [set() if col_type == "multi" else "" for _ in range(len(df))])[i]
                 widget = QWidget()
                 layout = QHBoxLayout(widget)
                 layout.setContentsMargins(0, 0, 0, 0)
@@ -457,14 +526,30 @@ class App(QMainWindow):
                     line_edit.setText(str(current_value))
                     line_edit.textChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
                     layout.addWidget(line_edit)
-                else:  # enum
+                elif col_type == "enum":
                     combo = QComboBox()
                     combo.addItems(["未选择"] + col_def["enum_values"])
                     combo.setCurrentText(str(current_value) if current_value else "未选择")
                     combo.currentTextChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
                     layout.addWidget(combo)
+                else:  # multi
+                    multi_widget = QWidget()
+                    multi_layout = QHBoxLayout(multi_widget)
+                    multi_layout.setContentsMargins(0, 0, 0, 0)
+                    row_multi_checkboxes = {}
+                    for item in col_def["enum_values"]:
+                        cb = QCheckBox(item)
+                        cb.setChecked(item in current_value)
+                        cb.stateChanged.connect(lambda state, r=i, cn=col_name, it=item: self.update_custom_multi(r, cn, it, state))
+                        multi_layout.addWidget(cb)
+                        row_multi_checkboxes[item] = cb
+                    score_label = QLabel(f"({len(current_value)}/{len(col_def['enum_values'])})")
+                    multi_layout.addWidget(score_label)
+                    layout.addWidget(multi_widget)
+                    self.custom_widgets[col_name].append(row_multi_checkboxes)
                 self.data_table.setCellWidget(i, col_idx, widget)
-                self.custom_widgets[col_name].append(widget)
+                if col_type != "multi":
+                    self.custom_widgets[col_name].append(widget)
 
     def update_jama(self, row, item, state):
         if not self.current_jama or row >= len(self.current_jama):
@@ -524,6 +609,28 @@ class App(QMainWindow):
             self.current_data[column_name] = self.current_custom_data[column_name]
         except ValueError:
             QMessageBox.warning(self, "警告", f"请输入有效的数字到 {column_name}")
+
+    def update_custom_multi(self, row, column_name, item, state):
+        if not self.current_custom_data or row >= len(self.current_data):
+            return
+        if not isinstance(self.current_custom_data[column_name][row], set):
+            self.current_custom_data[column_name][row] = set()
+        if state == Qt.Checked:
+            self.current_custom_data[column_name][row].add(item)
+        else:
+            self.current_custom_data[column_name][row].discard(item)
+        score = len(self.current_custom_data[column_name][row])
+        col_def = next((col for col in self.custom_columns if col["name"] == column_name), None)
+        if col_def and 0 <= row < self.data_table.rowCount():
+            col_idx = 13 + [col["name"] for col in self.custom_columns].index(column_name)
+            cell_widget = self.data_table.cellWidget(row, col_idx)
+            if cell_widget and cell_widget.layout():
+                multi_widget = cell_widget.layout().itemAt(0).widget()
+                if multi_widget and multi_widget.layout():
+                    score_label = multi_widget.layout().itemAt(multi_widget.layout().count() - 1).widget()
+                    if score_label:
+                        score_label.setText(f"({score}/{len(col_def['enum_values'])})")
+        self.current_data[column_name] = self.current_custom_data[column_name]
 
     def on_data_click(self, row, col):
         if col == 8:  # 查看列
