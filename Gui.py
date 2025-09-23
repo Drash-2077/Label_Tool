@@ -7,6 +7,7 @@ from PyQt5.QtWidgets import (
     QButtonGroup, QListWidget, QInputDialog, QMenu
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFontMetrics
 from datetime import datetime
 import pandas as pd
 import logging
@@ -190,7 +191,29 @@ class App(QMainWindow):
         self.data_table.setColumnCount(len(all_columns))
         self.data_table.setHorizontalHeaderLabels(all_columns)
         self.data_table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        column_widths = [300, 160, 140, 100, 100, 100, 100, 160, 80, 120, 480, 160, 1000] + [150] * len(custom_column_names)
+
+        # Calculate column widths
+        font = self.data_table.font()
+        font_metrics = QFontMetrics(font)
+        min_width = 80  # Minimum width for columns
+        base_column_widths = [300, 160, 140, 100, 100, 100, 100, 160, 80, 120, 480, 160, 1000]  # Default widths
+        custom_column_widths = []
+
+        for col_def in self.custom_columns:
+            col_width = min_width
+            if col_def["type"] == "numeric":
+                col_width = max(col_width, font_metrics.width(col_def["name"]) + 20)
+            elif col_def["type"] == "enum":
+                max_option_width = max([font_metrics.width(opt) for opt in col_def["enum_values"]] + [font_metrics.width("未选择")])
+                col_width = max(col_width, max_option_width + 40)  # Extra padding for combo box
+            else:  # multi
+                # Calculate width needed for all checkboxes + score label
+                checkbox_width = sum(font_metrics.width(opt) + 30 for opt in col_def["enum_values"])  # 30 for checkbox size
+                score_width = font_metrics.width(f"({len(col_def['enum_values'])}/{len(col_def['enum_values'])})") + 20
+                col_width = max(col_width, checkbox_width + score_width + 20)  # Extra padding
+            custom_column_widths.append(col_width)
+
+        column_widths = base_column_widths + custom_column_widths
         for i, width in enumerate(column_widths):
             self.data_table.setColumnWidth(i, width)
 
@@ -470,6 +493,7 @@ class App(QMainWindow):
             jama_widget = QWidget()
             jama_layout = QHBoxLayout(jama_widget)
             jama_layout.setContentsMargins(0, 0, 0, 0)
+            jama_layout.setSpacing(5)
             row_jama_checkboxes = {}
             for item in self.jama_items:
                 cb = QCheckBox(item)
@@ -479,6 +503,7 @@ class App(QMainWindow):
                 row_jama_checkboxes[item] = cb
             jama_score_label = QLabel(f"({jama_score}/4)")
             jama_layout.addWidget(jama_score_label)
+            jama_layout.addStretch()
             self.data_table.setCellWidget(i, 10, jama_widget)
             self.jama_checkboxes.append(row_jama_checkboxes)
 
@@ -486,6 +511,7 @@ class App(QMainWindow):
             gqs_widget = QWidget()
             gqs_layout = QHBoxLayout(gqs_widget)
             gqs_layout.setContentsMargins(0, 0, 0, 0)
+            gqs_layout.setSpacing(5)
             gqs_combo = QComboBox()
             gqs_combo.addItems(self.gqs_items)
             current_gqs_score = gqs[i] if i < len(gqs) else 1
@@ -495,12 +521,14 @@ class App(QMainWindow):
             gqs_layout.addWidget(gqs_combo)
             gqs_score_label = QLabel(f"({gqs_combo.currentIndex() + 1}/5)")
             gqs_layout.addWidget(gqs_score_label)
+            gqs_layout.addStretch()
             self.data_table.setCellWidget(i, 11, gqs_widget)
 
             # DISCERN annotation
             discern_widget = QWidget()
             discern_layout = QHBoxLayout(discern_widget)
             discern_layout.setContentsMargins(0, 0, 0, 0)
+            discern_layout.setSpacing(5)
             row_discern_checkboxes = {}
             for item in self.discern_items:
                 cb = QCheckBox(item)
@@ -510,6 +538,7 @@ class App(QMainWindow):
                 row_discern_checkboxes[item] = cb
             discern_score_label = QLabel(f"({discern_score}/5)")
             discern_layout.addWidget(discern_score_label)
+            discern_layout.addStretch()
             self.data_table.setCellWidget(i, 12, discern_widget)
             self.discern_checkboxes.append(row_discern_checkboxes)
 
@@ -521,21 +550,25 @@ class App(QMainWindow):
                 widget = QWidget()
                 layout = QHBoxLayout(widget)
                 layout.setContentsMargins(0, 0, 0, 0)
+                layout.setSpacing(5)
                 if col_type == "numeric":
                     line_edit = QLineEdit()
                     line_edit.setText(str(current_value))
                     line_edit.textChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
                     layout.addWidget(line_edit)
+                    layout.addStretch()
                 elif col_type == "enum":
                     combo = QComboBox()
                     combo.addItems(["未选择"] + col_def["enum_values"])
                     combo.setCurrentText(str(current_value) if current_value else "未选择")
                     combo.currentTextChanged.connect(lambda text, r=i, cn=col_name: self.update_custom_data(r, cn, text))
                     layout.addWidget(combo)
+                    layout.addStretch()
                 else:  # multi
                     multi_widget = QWidget()
                     multi_layout = QHBoxLayout(multi_widget)
                     multi_layout.setContentsMargins(0, 0, 0, 0)
+                    multi_layout.setSpacing(5)
                     row_multi_checkboxes = {}
                     for item in col_def["enum_values"]:
                         cb = QCheckBox(item)
@@ -545,6 +578,7 @@ class App(QMainWindow):
                         row_multi_checkboxes[item] = cb
                     score_label = QLabel(f"({len(current_value)}/{len(col_def['enum_values'])})")
                     multi_layout.addWidget(score_label)
+                    multi_layout.addStretch()
                     layout.addWidget(multi_widget)
                     self.custom_widgets[col_name].append(row_multi_checkboxes)
                 self.data_table.setCellWidget(i, col_idx, widget)
